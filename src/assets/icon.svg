@@ -1,0 +1,6 @@
+<svg width="512" height="512" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <!-- andrew.dev icon — Plum bg + A letter + Terra dot -->
+  <rect width="120" height="120" rx="28" fill="#5C3E9E"/>
+  <text x="60" y="78" text-anchor="middle" font-family="Georgia, serif" font-weight="700" font-size="72" fill="#FAF8FF">A</text>
+  <circle cx="91" cy="30" r="11" fill="#D4845A"/>
+</svg>
