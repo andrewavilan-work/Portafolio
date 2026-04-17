@@ -4,8 +4,8 @@ import { useTypewriter } from '../hooks/useTypewriter'
 import { useLang } from '../context/LangContext'
 
 const Hero3D = lazy(() => import('../components/Hero3D'))
-import cvEn from '../assets/pdf/Andrew_Avilan_CV _en.pdf'
-import cvEs from '../assets/pdf/Andrew_Avilan_CV _es.pdf'
+import cvEn from '../assets/pdf/Andrew_Avilan_CV_en.pdf'
+import cvEs from '../assets/pdf/Andrew_Avilan_CV_es.pdf'
 
 const TAGLINE = '$ dev --stack=react,js,python --open-to-work=true'
 
