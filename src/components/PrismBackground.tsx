@@ -1,8 +1,12 @@
 /**
- * High-Performance Real-time 3D Glass Prism + Cauchy Dispersion Light Engine.
- * Optimized with 0.5x light buffer, 40-wavelength continuous spectrum,
- * safe optical incidence window (no TIR collapse), 3D internal crystal depth,
- * and IntersectionObserver pause when offscreen.
+ * True 3D Translucent Crystal Prism + 2D Screen-Safe Cauchy Dispersion Engine.
+ * - The 3D prism rotates in perspective so front face, recessed back face,
+ *   side walls, and all 9 beveled crystal ridges are clearly visible in 3D.
+ * - Back faces render into the HalfFloat scene target first (with depth testing),
+ *   and Front faces refract the scene + back faces using screen-space normal
+ *   chromatic dispersion (RGB split), Beer-Lambert tint, and studio reflections.
+ * - The 40-wavelength Cauchy raytracer runs in 2D screen space on the projected
+ *   3D mid-plane vertices, making perspective near-plane ray explosions impossible.
  */
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
@@ -35,7 +39,6 @@ interface DustMote {
   phase: number;
 }
 
-// 40-wavelength Cauchy dispersion: n(lambda) = 1.2 + 0.1 / lambda^2
 function buildSpectrum(): SpectralSample[] {
   const count = 40;
   const raw: {
@@ -122,16 +125,16 @@ function buildSpectrum(): SpectralSample[] {
   });
 }
 
-// Precision rounded-edge equilateral 3D prism mesh with sculptural crystal normals
+// Build 3D equilateral prism mesh with smooth beveled edges and a 4th attribute (bevel mask)
 function createPrismGeometry(S: number): {
   geometry: THREE.BufferGeometry;
   depth: number;
-  planes: THREE.Vector4[];
+  R: number;
 } {
-  const depth = S * (0.34 / 0.57);
-  const fillet = S * (0.014 / 0.57);
-  const cornerSegs = 5;
-  const bevelSegs = 5;
+  const depth = S * 0.48; // Generous 3D crystal thickness
+  const fillet = S * 0.026; // Clean luxury chamfered bevel on all 9 edges
+  const cornerSegs = 6;
+  const bevelSegs = 6;
   const edgeSegs = 16;
 
   const R = S / Math.sqrt(3);
@@ -141,8 +144,14 @@ function createPrismGeometry(S: number): {
     [S / 2, -R / 2], // right
   ];
 
-  const contour: { x: number; y: number; nx: number; ny: number }[] = [];
-  const rCorner = fillet * 1.25;
+  const contour: {
+    x: number;
+    y: number;
+    nx: number;
+    ny: number;
+    isCorner: number;
+  }[] = [];
+  const rCorner = fillet * 1.2;
 
   const cornerCenters: Vec2[] = verts2D.map(([vx, vy]) => {
     const len = Math.hypot(vx, vy);
@@ -171,14 +180,18 @@ function createPrismGeometry(S: number): {
     while (a1 < a0) a1 += Math.PI * 2;
 
     for (let s = 0; s <= cornerSegs; s++) {
-      const a = a0 + (a1 - a0) * (s / cornerSegs);
+      const u = s / cornerSegs;
+      const a = a0 + (a1 - a0) * u;
       const nx = Math.cos(a);
       const ny = Math.sin(a);
+      // Peak at middle of the corner bevel ridge
+      const cornerFactor = Math.sin(u * Math.PI);
       contour.push({
         x: cx + nx * rCorner,
         y: cy + ny * rCorner,
         nx,
         ny,
+        isCorner: cornerFactor,
       });
     }
 
@@ -193,38 +206,50 @@ function createPrismGeometry(S: number): {
         y: pStart[1] + (pEnd[1] - pStart[1]) * t,
         nx: currN[0],
         ny: currN[1],
+        isCorner: 0,
       });
     }
   }
 
   const ringLen = contour.length;
   const halfD = depth / 2;
-  const thetaMax = Math.PI / 2 - 0.05;
+  const thetaMax = Math.PI / 2 - 0.04;
 
-  const rings: { z: number; inset: number; nz: number; nr: number }[] = [];
+  const rings: {
+    z: number;
+    inset: number;
+    nz: number;
+    nr: number;
+    isBevel: number;
+  }[] = [];
 
   for (let b = bevelSegs; b >= 0; b--) {
-    const theta = (b / bevelSegs) * thetaMax;
+    const u = b / bevelSegs;
+    const theta = u * thetaMax;
     rings.push({
       z: -halfD + fillet * (1 - Math.sin(theta)),
       inset: fillet * (1 - Math.cos(theta)),
       nz: -Math.sin(theta),
       nr: Math.cos(theta),
+      isBevel: Math.sin(u * Math.PI),
     });
   }
 
   for (let b = 0; b <= bevelSegs; b++) {
-    const theta = (b / bevelSegs) * thetaMax;
+    const u = b / bevelSegs;
+    const theta = u * thetaMax;
     rings.push({
       z: halfD - fillet * (1 - Math.sin(theta)),
       inset: fillet * (1 - Math.cos(theta)),
       nz: Math.sin(theta),
       nr: Math.cos(theta),
+      isBevel: Math.sin(u * Math.PI),
     });
   }
 
   const positions: number[] = [];
   const normals: number[] = [];
+  const bevelMask: number[] = [];
   const indices: number[] = [];
 
   for (let r = 0; r < rings.length; r++) {
@@ -237,6 +262,7 @@ function createPrismGeometry(S: number): {
         ring.z
       );
       normals.push(pt.nx * ring.nr, pt.ny * ring.nr, ring.nz);
+      bevelMask.push(Math.max(ring.isBevel, pt.isCorner));
     }
   }
 
@@ -253,42 +279,44 @@ function createPrismGeometry(S: number): {
     }
   }
 
-  // Back cap (-z) with subtle 3D optical dome normal gradient so back face catches studio reflections
+  // Back cap (-z)
   const backCenterIdx = positions.length / 3;
   positions.push(0, 0, -halfD);
   normals.push(0, 0, -1);
+  bevelMask.push(0);
   const backRingStart = positions.length / 3;
   const firstRing = rings[0];
   for (let c = 0; c < ringLen; c++) {
     const pt = contour[c];
-    const px = pt.x - pt.nx * firstRing.inset;
-    const py = pt.y - pt.ny * firstRing.inset;
-    positions.push(px, py, -halfD);
-    const nx = (px / R) * 0.14;
-    const ny = (py / R) * 0.14;
-    const len = Math.hypot(nx, ny, 1);
-    normals.push(nx / len, ny / len, -1 / len);
+    positions.push(
+      pt.x - pt.nx * firstRing.inset,
+      pt.y - pt.ny * firstRing.inset,
+      -halfD
+    );
+    normals.push(0, 0, -1);
+    bevelMask.push(0.35);
   }
   for (let c = 0; c < ringLen; c++) {
     const next = (c + 1) % ringLen;
     indices.push(backCenterIdx, backRingStart + next, backRingStart + c);
   }
 
-  // Front cap (+z) with subtle luxury watch-crystal curvature normals so studio panels sweep across the face in 3D
+  // Front cap (+z)
   const frontCenterIdx = positions.length / 3;
   positions.push(0, 0, halfD);
   normals.push(0, 0, 1);
+  bevelMask.push(0);
   const frontRingStart = positions.length / 3;
   const lastRing = rings[rings.length - 1];
   for (let c = 0; c < ringLen; c++) {
     const pt = contour[c];
-    const px = pt.x - pt.nx * lastRing.inset;
-    const py = pt.y - pt.ny * lastRing.inset;
-    positions.push(px, py, halfD);
-    const nx = (px / R) * 0.16;
-    const ny = (py / R) * 0.16;
-    const len = Math.hypot(nx, ny, 1);
-    normals.push(nx / len, ny / len, 1 / len);
+    positions.push(
+      pt.x - pt.nx * lastRing.inset,
+      pt.y - pt.ny * lastRing.inset,
+      halfD
+    );
+    normals.push(0, 0, 1);
+    bevelMask.push(0.35);
   }
   for (let c = 0; c < ringLen; c++) {
     const next = (c + 1) % ringLen;
@@ -301,21 +329,15 @@ function createPrismGeometry(S: number): {
     new THREE.Float32BufferAttribute(positions, 3)
   );
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setAttribute(
+    'aBevel',
+    new THREE.Float32BufferAttribute(bevelMask, 1)
+  );
   geometry.setIndex(indices);
 
-  const apothem = R / 2;
-  const planes: THREE.Vector4[] = [
-    new THREE.Vector4(edgeNormals[0][0], edgeNormals[0][1], 0, apothem),
-    new THREE.Vector4(edgeNormals[1][0], edgeNormals[1][1], 0, apothem),
-    new THREE.Vector4(edgeNormals[2][0], edgeNormals[2][1], 0, apothem),
-    new THREE.Vector4(0, 0, 1, halfD),
-    new THREE.Vector4(0, 0, -1, halfD),
-  ];
-
-  return { geometry, depth, planes };
+  return { geometry, depth, R };
 }
 
-// Sculptural luxury studio environment with 3D crystal face reflections
 const ENV_GLSL = /* glsl */ `
 vec3 samplePanel(vec3 dir, vec3 panelDir, vec2 panelSize, float feather, vec3 color, float intensity) {
   float denom = dot(dir, panelDir);
@@ -335,23 +357,23 @@ vec3 sampleStudio(vec3 dir) {
   vec3 d = normalize(dir);
   float floorAmt = smoothstep(-0.1, -0.85, d.y);
   float backAmt = smoothstep(0.2, -0.8, d.z);
-  vec3 room = vec3(0.015, 0.016, 0.02);
-  room += vec3(0.018, 0.02, 0.024) * floorAmt;
-  room *= (1.0 - 0.5 * backAmt);
+  vec3 room = vec3(0.015, 0.017, 0.022);
+  room += vec3(0.02, 0.022, 0.028) * floorAmt;
+  room *= (1.0 - 0.45 * backAmt);
 
   vec3 c = room;
-  // Back-left soft platinum studio wall
-  c += samplePanel(d, normalize(vec3(-0.78, 0.12, 0.61)), vec2(1.25, 1.15), 0.24, vec3(0.84, 0.88, 0.95), 0.045);
+  // Left soft platinum rim light
+  c += samplePanel(d, normalize(vec3(-0.75, 0.18, 0.63)), vec2(0.55, 1.4), 0.22, vec3(0.84, 0.90, 1.0), 0.95);
   // Warm lower studio bounce
-  c += samplePanel(d, normalize(vec3(0.0, -0.68, 0.73)), vec2(0.48, 0.58), 0.20, vec3(1.0, 0.97, 0.92), 0.28);
-  // Cool top-right key light (sculpts the crystal bevels)
-  c += samplePanel(d, normalize(vec3(0.58, 0.36, 0.72)), vec2(0.52, 0.18), 0.04, vec3(0.78, 0.90, 1.0), 21.0);
-  // Subtle diagonal watch-crystal sheen across the front face
-  c += samplePanel(d, normalize(vec3(-0.16, 0.22, 0.96)), vec2(0.65, 0.18), 0.22, vec3(0.88, 0.93, 1.0), 0.36);
+  c += samplePanel(d, normalize(vec3(0.0, -0.70, 0.71)), vec2(0.55, 0.55), 0.24, vec3(1.0, 0.96, 0.90), 0.32);
+  // Top-right soft luxury key light (sculpts the 3D crystal side walls & bevels without harsh glare blob)
+  c += samplePanel(d, normalize(vec3(0.72, 0.44, 0.53)), vec2(0.55, 0.32), 0.22, vec3(0.82, 0.92, 1.0), 1.85);
+  // Top zenith specular bar
+  c += samplePanel(d, normalize(vec3(-0.15, 0.85, 0.50)), vec2(1.1, 0.18), 0.16, vec3(0.92, 0.96, 1.0), 1.35);
 
   c = c / (1.0 + c);
   c = pow(max(c, vec3(0.0)), vec3(1.0 / 2.2));
-  c = pow(c, vec3(2.2)) * 2.35;
+  c = pow(c, vec3(2.2)) * 2.3;
   return c;
 }
 
@@ -397,174 +419,121 @@ void main() {
 `;
 
 const GLASS_VERT = /* glsl */ `
+attribute float aBevel;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
+varying vec3 vViewNormal;
+varying float vBevel;
 void main() {
+  vBevel = aBevel;
   vec4 wp = modelMatrix * vec4(position, 1.0);
   vWorldPos = wp.xyz;
   vWorldNormal = normalize(mat3(modelMatrix) * normal);
+  vViewNormal = normalize(normalMatrix * normal);
   gl_Position = projectionMatrix * viewMatrix * wp;
 }
 `;
 
+// Back faces of the 3D crystal prism: visible THROUGH the translucent front faces!
 const GLASS_BACK_FRAG = /* glsl */ `
 precision highp float;
-uniform vec4 uPlanes[5];
-uniform float uIor;
 uniform float uF0;
-uniform float uReflectionStrength;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
+varying float vBevel;
 
 ${ENV_GLSL}
-
-void intersectPrism(vec3 ro, vec3 rd, int excludePlane, out float bestT, out int bestIdx) {
-  bestT = 1e9;
-  bestIdx = -1;
-  for (int i = 0; i < 5; i++) {
-    if (i == excludePlane) continue;
-    vec3 n = uPlanes[i].xyz;
-    float d = uPlanes[i].w;
-    float denom = dot(rd, n);
-    if (denom > 1e-5) {
-      float t = (d - dot(ro, n)) / denom;
-      if (t > 0.001 && t < bestT) {
-        bestT = t;
-        bestIdx = i;
-      }
-    }
-  }
-}
 
 void main() {
   vec3 V = normalize(vWorldPos - cameraPosition);
   vec3 N = -normalize(vWorldNormal);
-
-  int excludePlane = -1;
-  float maxDot = -2.0;
-  for (int i = 0; i < 5; i++) {
-    float dp = dot(normalize(vWorldNormal), uPlanes[i].xyz);
-    if (dp > maxDot) {
-      maxDot = dp;
-      excludePlane = i;
-    }
-  }
-
   float cosIn = clamp(dot(-V, N), 0.0, 1.0);
-  vec3 refracted = refract(V, N, uIor);
-  bool escaped = length(refracted) > 0.001;
-  float weight = escaped ? schlickFresnel(cosIn, uF0) : 1.0;
+  float F = schlickFresnel(cosIn, uF0);
 
   vec3 rDir = reflect(V, N);
-  vec3 rPos = vWorldPos;
-  int rExcl = excludePlane;
-  vec3 env = vec3(0.0);
+  vec3 env = sampleStudio(rDir);
 
-  for (int bounce = 0; bounce < 3; bounce++) {
-    float tHit;
-    int idx;
-    intersectPrism(rPos, rDir, rExcl, tHit, idx);
-    if (idx < 0) {
-      env = sampleStudio(rDir);
-      break;
-    }
-    vec3 hitPos = rPos + rDir * tHit;
-    vec3 hitN = -uPlanes[idx].xyz;
-    float c = clamp(dot(-rDir, hitN), 0.0, 1.0);
-    vec3 outDir = refract(rDir, hitN, uIor);
-    if (length(outDir) > 0.001) {
-      float fExit = schlickFresnel(c, uF0);
-      env = sampleStudio(outDir) * (1.0 - fExit);
-      break;
-    }
-    rPos = hitPos;
-    rDir = reflect(rDir, hitN);
-    rExcl = idx;
-  }
+  // Subtle internal back-bevel crystal ridge highlight visible through the glass
+  float bevelGlow = smoothstep(0.15, 0.95, vBevel) * 0.24;
+  float rim = pow(1.0 - cosIn, 2.5) * 0.18;
+  vec3 backCrystal = env * 1.45 * F + vec3(0.62, 0.76, 0.94) * (bevelGlow + rim);
+  float alpha = clamp(F * 0.65 + bevelGlow * 0.75 + 0.08, 0.0, 0.85);
 
-  vec3 col = env * uReflectionStrength * weight;
-  gl_FragColor = vec4(col, weight);
+  gl_FragColor = vec4(backCrystal * alpha, alpha);
 }
 `;
 
+// Front faces of the 3D crystal prism: translucent screen-space chromatic refraction
+// of both the rainbow light beam AND the recessed 3D back crystal faces!
 const GLASS_FRONT_FRAG = /* glsl */ `
 precision highp float;
 uniform sampler2D uBgTex;
-uniform mat4 uViewProj;
-uniform vec4 uPlanes[5];
-uniform float uIor;
+uniform vec2 uResolution;
 uniform float uF0;
 uniform float uReflectionStrength;
-uniform vec3 uAbsorption;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
+varying vec3 vViewNormal;
+varying float vBevel;
 
 ${ENV_GLSL}
 
-void intersectPrism(vec3 ro, vec3 rd, out float bestT, out int bestIdx) {
-  bestT = 1e9;
-  bestIdx = -1;
-  for (int i = 0; i < 5; i++) {
-    vec3 n = uPlanes[i].xyz;
-    float d = uPlanes[i].w;
-    float denom = dot(rd, n);
-    if (denom > 1e-5) {
-      float t = (d - dot(ro, n)) / denom;
-      if (t > 0.001 && t < bestT) {
-        bestT = t;
-        bestIdx = i;
-      }
-    }
-  }
-}
-
 vec3 softShoulder(vec3 x) {
-  vec3 above = 0.8 + 0.2 * tanh((x - 0.8) / 0.2);
+  vec3 above = 0.82 + 0.18 * tanh((x - 0.82) / 0.18);
   return vec3(
-    x.r > 0.8 ? above.r : x.r,
-    x.g > 0.8 ? above.g : x.g,
-    x.b > 0.8 ? above.b : x.b
+    x.r > 0.82 ? above.r : x.r,
+    x.g > 0.82 ? above.g : x.g,
+    x.b > 0.82 ? above.b : x.b
   );
 }
 
 void main() {
   vec3 V = normalize(vWorldPos - cameraPosition);
   vec3 N = normalize(vWorldNormal);
+  vec3 Nv = normalize(vViewNormal);
+
   float facing = clamp(dot(-V, N), 0.0, 1.0);
   float F = schlickFresnel(facing, uF0);
 
+  // Studio reflection off the 3D angled crystal facets
   vec3 reflDir = reflect(V, N);
   vec3 envRefl = sampleStudio(reflDir);
   vec3 reflected = envRefl * uReflectionStrength;
 
-  vec3 refrDir = refract(V, N, 1.0 / uIor);
-  float tExit;
-  int exitIdx;
-  intersectPrism(vWorldPos, refrDir, tExit, exitIdx);
-  float maxDepth = uPlanes[3].w * 3.5;
-  float dist = exitIdx >= 0 ? min(tExit, maxDepth) : 0.0;
-  vec3 exitPos = vWorldPos + refrDir * dist;
+  // Screen-space normal-driven chromatic refraction (100% immune to plane-intersection glitches)
+  vec2 screenUv = gl_FragCoord.xy / uResolution;
+  // Side walls & bevels bend light more strongly than the central flat cap, revealing true 3D thickness
+  float sideAngle = 1.0 - abs(Nv.z);
+  vec2 refractOffset = Nv.xy * (0.022 + 0.036 * sideAngle);
 
-  vec4 clip = uViewProj * vec4(exitPos, 1.0);
-  vec2 uv = clamp((clip.xy / max(clip.w, 1e-4)) * 0.5 + 0.5, 0.001, 0.999);
-  vec3 bgLin = texture2D(uBgTex, uv).rgb;
-  vec3 transmitted = bgLin * exp(-uAbsorption * dist);
+  vec2 uvR = clamp(screenUv - refractOffset * 0.86, 0.002, 0.998);
+  vec2 uvG = clamp(screenUv - refractOffset * 1.00, 0.002, 0.998);
+  vec2 uvB = clamp(screenUv - refractOffset * 1.16, 0.002, 0.998);
 
-  // Sculptural 3D internal side-wall depth cue (gives true 3D thickness from front to back crystal edge)
-  float sideDist = 1e9;
-  for (int i = 0; i < 3; i++) {
-    float sd = uPlanes[i].w - dot(vWorldPos.xy, uPlanes[i].xy);
-    sideDist = min(sideDist, sd);
-  }
-  float wallRim = smoothstep(uPlanes[3].w * 0.36, 0.0, sideDist);
-  vec3 crystalEdge = vec3(0.76, 0.86, 0.98) * wallRim * 0.14 * (0.4 + 0.6 * (1.0 - facing));
+  float bgR = texture2D(uBgTex, uvR).r;
+  float bgG = texture2D(uBgTex, uvG).g;
+  float bgB = texture2D(uBgTex, uvB).b;
+  vec3 bgLin = vec3(bgR, bgG, bgB);
 
+  // Subtle smoked-crystal optical tint (thicker absorption on 3D side walls)
+  vec3 crystalTint = mix(vec3(0.94, 0.96, 1.0), vec3(0.74, 0.84, 0.96), sideAngle * 0.55);
+  vec3 transmitted = bgLin * crystalTint;
+
+  // Crisp 3D beveled ridge highlight along all 9 chamfered edges
+  float bevelRidge = smoothstep(0.25, 0.95, vBevel);
+  vec3 ridgeLight = vec3(0.82, 0.90, 1.0) * bevelRidge * (0.14 + 0.22 * (1.0 - facing));
+
+  // Translucent 3D side-wall sheen (distinguishes the extruded side walls from the front face)
+  float sideWallMask = smoothstep(0.2, 0.85, sideAngle) * (1.0 - bevelRidge * 0.5);
+  vec3 sideWallSheen = vec3(0.55, 0.68, 0.86) * sideWallMask * 0.075;
+
+  // Specular studio highlight
   float lum = dot(envRefl, vec3(0.2126, 0.7152, 0.0722));
-  float hlMask = smoothstep(0.45, 0.82, lum);
-  float hlGain = clamp(uReflectionStrength * 0.42, 0.0, 0.75) * (0.65 + 0.35 * pow(1.0 - facing, 1.5));
+  float hlMask = smoothstep(0.4, 0.82, lum);
+  float hlGain = clamp(uReflectionStrength * 0.42, 0.0, 0.78) * (0.6 + 0.4 * pow(1.0 - facing, 1.4));
   vec3 highlight = envRefl * hlMask * hlGain;
 
-  vec3 col = transmitted * (1.0 - F) + reflected * F + highlight + crystalEdge;
+  vec3 col = transmitted * (1.0 - F * 0.75) + reflected * F + highlight + ridgeLight + sideWallSheen;
   col = softShoulder(max(col, vec3(0.0)));
   gl_FragColor = vec4(linearToSrgb(col), 1.0);
 }
@@ -683,20 +652,15 @@ export function PrismBackground() {
         vertexShader: GLASS_VERT,
         fragmentShader: GLASS_BACK_FRAG,
         uniforms: {
-          uPlanes: {
-            value: Array.from({ length: 5 }, () => new THREE.Vector4()),
-          },
-          uIor: { value: ior },
           uF0: { value: f0 },
-          uReflectionStrength: { value: 2.25 },
         },
         side: THREE.BackSide,
         transparent: true,
         blending: THREE.CustomBlending,
         blendSrc: THREE.OneFactor,
         blendDst: THREE.OneMinusSrcAlphaFactor,
-        depthTest: false,
-        depthWrite: false,
+        depthTest: true,
+        depthWrite: true,
       });
 
       frontMat = new THREE.ShaderMaterial({
@@ -704,14 +668,9 @@ export function PrismBackground() {
         fragmentShader: GLASS_FRONT_FRAG,
         uniforms: {
           uBgTex: { value: null },
-          uViewProj: { value: new THREE.Matrix4() },
-          uPlanes: {
-            value: Array.from({ length: 5 }, () => new THREE.Vector4()),
-          },
-          uIor: { value: ior },
+          uResolution: { value: new THREE.Vector2(1280, 720) },
           uF0: { value: f0 },
-          uReflectionStrength: { value: 2.25 },
-          uAbsorption: { value: new THREE.Vector3(1, 1, 0.54) },
+          uReflectionStrength: { value: 2.2 },
         },
         side: THREE.FrontSide,
         depthTest: true,
@@ -728,16 +687,20 @@ export function PrismBackground() {
     let W = 1280;
     let H = 720;
     let dpr = 1;
-    // Half-resolution light canvas makes 3-pass bloom & GPU texture upload 16x faster with identical soft bloom quality
     const lightDpr = 0.55;
     let mobile = false;
     let S = 360;
+    let R = 207.8;
     let cx = 640;
     let cy = 380;
     let camDist = 800;
 
-    let triVerts: Vec2[] = [];
-    let triEdges: { a: Vec2; b: Vec2; normal: Vec2 }[] = [];
+    // 3D local mid-plane vertices (y-up)
+    let localVerts3D: [number, number, number][] = [
+      [0, 200, 0],
+      [180, -100, 0],
+      [-180, -100, 0],
+    ];
 
     const rebuildLayout = () => {
       const rect = stage.getBoundingClientRect();
@@ -747,32 +710,21 @@ export function PrismBackground() {
       mobile = W < 820;
 
       if (mobile) {
-        S = Math.min(W * 0.6, H * 0.34, 330);
+        S = Math.min(W * 0.56, H * 0.32, 310);
         cx = W * 0.5;
         cy = H * 0.54;
       } else {
-        S = Math.min(W * 0.33, H * 0.54);
+        S = Math.min(W * 0.32, H * 0.52);
         cx = W * 0.55;
         cy = H * 0.56;
       }
 
-      const R = S / Math.sqrt(3);
-      const top: Vec2 = [cx, cy - R];
-      const right: Vec2 = [cx + S / 2, cy + R / 2];
-      const left: Vec2 = [cx - S / 2, cy + R / 2];
-      triVerts = [top, right, left];
-
-      const pairs: [Vec2, Vec2][] = [
-        [top, right],
-        [right, left],
-        [left, top],
+      R = S / Math.sqrt(3);
+      localVerts3D = [
+        [0, R, 0], // top
+        [S / 2, -R / 2, 0], // right
+        [-S / 2, -R / 2, 0], // left
       ];
-      triEdges = pairs.map(([a, b]) => {
-        const dx = b[0] - a[0];
-        const dy = b[1] - a[1];
-        const len = Math.hypot(dx, dy);
-        return { a, b, normal: [dy / len, -dx / len] };
-      });
 
       offCanvas.width = Math.max(2, Math.round(W * lightDpr));
       offCanvas.height = Math.max(2, Math.round(H * lightDpr));
@@ -783,17 +735,17 @@ export function PrismBackground() {
         renderer.setPixelRatio(dpr);
         renderer.setSize(W, H, false);
 
+        const rtW = Math.round(W * dpr);
+        const rtH = Math.round(H * dpr);
+        frontMat.uniforms.uResolution.value.set(rtW, rtH);
+
         if (rt) rt.dispose();
-        rt = new THREE.WebGLRenderTarget(
-          Math.round(W * dpr),
-          Math.round(H * dpr),
-          {
-            type: THREE.HalfFloatType,
-            minFilter: THREE.LinearFilter,
-            magFilter: THREE.LinearFilter,
-            depthBuffer: false,
-          }
-        );
+        rt = new THREE.WebGLRenderTarget(rtW, rtH, {
+          type: THREE.HalfFloatType,
+          minFilter: THREE.LinearFilter,
+          magFilter: THREE.LinearFilter,
+          depthBuffer: true,
+        });
 
         const copyMesh = sceneCopy?.children[0] as THREE.Mesh;
         (copyMesh.material as THREE.ShaderMaterial).uniforms.uTex.value =
@@ -812,20 +764,11 @@ export function PrismBackground() {
           scenePrismFront.remove(prismMeshFront);
         }
 
-        const { geometry, planes } = createPrismGeometry(S);
+        const { geometry } = createPrismGeometry(S);
         prismMeshBack = new THREE.Mesh(geometry, backMat);
         prismMeshFront = new THREE.Mesh(geometry, frontMat);
         scenePrismBack.add(prismMeshBack);
         scenePrismFront.add(prismMeshFront);
-
-        backMat.uniforms.uPlanes.value = planes;
-        frontMat.uniforms.uPlanes.value = planes;
-        const absScale = 0.57 / S;
-        frontMat.uniforms.uAbsorption.value.set(
-          1 * absScale,
-          1 * absScale,
-          0.54 * absScale
-        );
       }
     };
 
@@ -839,11 +782,10 @@ export function PrismBackground() {
     window.addEventListener('resize', onResize, { passive: true });
     document.fonts?.ready.then(rebuildLayout);
 
-    // Default aim inside the sweet spot for a wide, clean rainbow dispersion fan
     const aimTarget = { x: 0.45, y: 0.42 };
     const aimCurr = { x: 0.45, y: 0.42 };
-    const orbitTarget = { x: 0.25, y: -0.18 };
-    const orbitCurr = { x: 0.25, y: -0.18 };
+    const orbitTarget = { x: 0, y: 0 };
+    const orbitCurr = { x: 0, y: 0 };
     let lastPointerTime = performance.now() - 7000;
 
     const updatePointer = (clientX: number, clientY: number) => {
@@ -873,8 +815,8 @@ export function PrismBackground() {
       }
     };
     const onPointerLeave = () => {
-      orbitTarget.x = 0.2;
-      orbitTarget.y = -0.15;
+      orbitTarget.x = 0;
+      orbitTarget.y = 0;
     };
 
     window.addEventListener('pointermove', onPointerMove, { passive: true });
@@ -935,11 +877,17 @@ export function PrismBackground() {
     }
 
     const tmpVec3 = new THREE.Vector3();
-    const viewProj = new THREE.Matrix4();
 
-    const projectPlane = (px: number, py: number): Vec2 => {
-      if (!camera) return [px, py];
-      tmpVec3.set(px - cx, cy - py, 0);
+    // Project a 3D local vertex of the prism to 2D screen coordinates (CSS px).
+    // Only called on prism vertices (|z| <= R << camDist), never on far rays!
+    const projectLocal3DToScreen = (
+      lx: number,
+      ly: number,
+      lz: number
+    ): Vec2 => {
+      if (!camera || !prismMeshFront) return [cx + lx, cy - ly];
+      tmpVec3.set(lx, ly, lz);
+      tmpVec3.applyMatrix4(prismMeshFront.matrixWorld);
       tmpVec3.project(camera);
       return [(tmpVec3.x * 0.5 + 0.5) * W, (-tmpVec3.y * 0.5 + 0.5) * H];
     };
@@ -962,10 +910,10 @@ export function PrismBackground() {
       if (isIdle && !reducedMotion) {
         const angle = (tSec / 18) * Math.PI * 2;
         aimTarget.x = 0.5 + Math.cos(angle) * 0.28;
-        aimTarget.y = 0.45 + Math.sin(angle) * 0.26;
+        aimTarget.y = 0.45 + Math.sin(angle) * 0.25;
         if (!mobile) {
-          orbitTarget.x = Math.cos(angle) * 0.45;
-          orbitTarget.y = Math.sin(angle) * 0.35;
+          orbitTarget.x = Math.cos(angle * 0.8) * 0.55;
+          orbitTarget.y = Math.sin(angle * 0.8) * 0.45;
         }
       }
 
@@ -976,10 +924,21 @@ export function PrismBackground() {
       orbitCurr.x += (orbitTarget.x - orbitCurr.x) * camEase;
       orbitCurr.y += (orbitTarget.y - orbitCurr.y) * camEase;
 
-      // Smooth 3D camera orbit (±5.5° yaw/pitch) keeps prism & 2D light plane in exact 1:1 registration while showing 3D crystal bevels
+      // Sculptural 3D perspective angle: front triangle, recessed back triangle, and side crystal walls are always visible in 3D
+      const rotY = THREE.MathUtils.degToRad(22 + orbitCurr.x * 13);
+      const rotX = THREE.MathUtils.degToRad(-11 + orbitCurr.y * 9);
+      const rotZ = THREE.MathUtils.degToRad(-3 + orbitCurr.x * -2.5);
+
+      if (prismMeshBack && prismMeshFront) {
+        prismMeshBack.rotation.set(rotX, rotY, rotZ);
+        prismMeshFront.rotation.set(rotX, rotY, rotZ);
+        prismMeshBack.updateMatrixWorld();
+        prismMeshFront.updateMatrixWorld();
+      }
+
       if (camera) {
-        const yaw = THREE.MathUtils.degToRad(orbitCurr.x * 5.5);
-        const pitch = THREE.MathUtils.degToRad(-orbitCurr.y * 5.0);
+        const yaw = THREE.MathUtils.degToRad(orbitCurr.x * 3.5);
+        const pitch = THREE.MathUtils.degToRad(-orbitCurr.y * 3.5);
         camera.position.set(
           Math.sin(yaw) * Math.cos(pitch) * camDist,
           Math.sin(pitch) * camDist,
@@ -987,16 +946,41 @@ export function PrismBackground() {
         );
         camera.lookAt(0, 0, 0);
         camera.updateMatrixWorld();
-        viewProj.multiplyMatrices(
-          camera.projectionMatrix,
-          camera.matrixWorldInverse
-        );
       }
 
-      // Safe optical window: entryT in [0.18, 0.80] and incidence in [-20°, +42°]
-      // Guarantees ALL 40 wavelengths always refract out the left face without TIR collapse!
+      // Project the 3D rotated prism's central cross-section triangle to 2D screen space
+      const top2D = projectLocal3DToScreen(
+        localVerts3D[0][0],
+        localVerts3D[0][1],
+        localVerts3D[0][2]
+      );
+      const right2D = projectLocal3DToScreen(
+        localVerts3D[1][0],
+        localVerts3D[1][1],
+        localVerts3D[1][2]
+      );
+      const left2D = projectLocal3DToScreen(
+        localVerts3D[2][0],
+        localVerts3D[2][1],
+        localVerts3D[2][2]
+      );
+
+      const pairs: [Vec2, Vec2][] = [
+        [top2D, right2D], // 0: right face
+        [right2D, left2D], // 1: base
+        [left2D, top2D], // 2: left face
+      ];
+      const triEdges = pairs.map(([a, b]) => {
+        const dx = b[0] - a[0];
+        const dy = b[1] - a[1];
+        const len = Math.max(1e-4, Math.hypot(dx, dy));
+        return { a, b, normal: [dy / len, -dx / len] as Vec2 };
+      });
+
+      // Full-range vgpu optical swing: entry point 0.08..0.92, incidence -35° (top) -> 60° (mid) -> 75° (bottom),
+      // traced in 2D screen space on the 3D prism cross-section so rays swing freely and never cross the 3D camera near-plane!
       const rightFace = triEdges[0];
-      const entryT = 0.18 + aimCurr.x * (0.80 - 0.18);
+      const entryT = 0.08 + aimCurr.x * (0.92 - 0.08);
       const entryX =
         rightFace.a[0] + (rightFace.b[0] - rightFace.a[0]) * entryT;
       const entryY =
@@ -1004,9 +988,9 @@ export function PrismBackground() {
 
       let incDeg: number;
       if (aimCurr.y < 0.5) {
-        incDeg = -20 + (aimCurr.y / 0.5) * (24 - -20);
+        incDeg = -35 + (aimCurr.y / 0.5) * (60 - -35);
       } else {
-        incDeg = 24 + ((aimCurr.y - 0.5) / 0.5) * (42 - 24);
+        incDeg = 60 + ((aimCurr.y - 0.5) / 0.5) * (75 - 60);
       }
       const incRad = THREE.MathUtils.degToRad(incDeg);
       const inNx = -rightFace.normal[0];
@@ -1037,7 +1021,7 @@ export function PrismBackground() {
         nGlass: number,
         lastFace: number
       ) => {
-        if (depth > 5) return;
+        if (depth > 7) return;
 
         let bestT = Infinity;
         let hitFace = -1;
@@ -1122,7 +1106,7 @@ export function PrismBackground() {
         }
 
         const reflE = refr ? energy * R : energy;
-        if (reflE > 0.14) {
+        if (reflE > 0.12) {
           const dot2 = 2 * (dx * nx + dy * ny);
           const rx = dx - dot2 * nx;
           const ry = dy - dot2 * ny;
@@ -1158,28 +1142,26 @@ export function PrismBackground() {
         );
       }
 
-      // Draw light into half-res offscreen 2D canvas
+      // Draw light directly in 2D screen space (no 3D camera projection on far rays!)
       offCtx.setTransform(lightDpr, 0, 0, lightDpr, 0, 0);
       offCtx.clearRect(0, 0, W, H);
       offCtx.globalCompositeOperation = 'lighter';
       offCtx.lineCap = 'round';
 
-      const pSrc = projectPlane(srcX, srcY);
-      const pEntry = projectPlane(entryX, entryY);
       const beamScale = mobile ? 0.8 : 1;
 
       offCtx.strokeStyle = 'rgba(255,255,255,0.3)';
       offCtx.lineWidth = 12 * beamScale;
       offCtx.beginPath();
-      offCtx.moveTo(pSrc[0], pSrc[1]);
-      offCtx.lineTo(pEntry[0], pEntry[1]);
+      offCtx.moveTo(srcX, srcY);
+      offCtx.lineTo(entryX, entryY);
       offCtx.stroke();
 
       offCtx.strokeStyle = 'rgba(255,255,255,1)';
       offCtx.lineWidth = 4.5 * beamScale;
       offCtx.beginPath();
-      offCtx.moveTo(pSrc[0], pSrc[1]);
-      offCtx.lineTo(pEntry[0], pEntry[1]);
+      offCtx.moveTo(srcX, srcY);
+      offCtx.lineTo(entryX, entryY);
       offCtx.stroke();
 
       const perpX = -beamDy;
@@ -1192,12 +1174,11 @@ export function PrismBackground() {
         const spreadPx = (6 + distFromPrism * 0.08) * m.spread;
         const mx = entryX - beamDx * distFromPrism + perpX * spreadPx;
         const my = entryY - beamDy * distFromPrism + perpY * spreadPx;
-        const pm = projectPlane(mx, my);
         const twinkle =
           (0.3 + 0.7 * (0.5 + 0.5 * Math.sin(tSec * 2.5 + m.phase))) * 0.75;
         offCtx.fillStyle = `rgba(255,255,255,${twinkle.toFixed(3)})`;
         offCtx.beginPath();
-        offCtx.arc(pm[0], pm[1], m.radius, 0, Math.PI * 2);
+        offCtx.arc(mx, my, m.radius, 0, Math.PI * 2);
         offCtx.fill();
       }
 
@@ -1210,17 +1191,13 @@ export function PrismBackground() {
           const b = segs[i + 1];
           if (b.wlIndex - a.wlIndex > 2) continue;
 
-          const p1 = projectPlane(a.x1, a.y1);
-          const p2 = projectPlane(a.x2, a.y2);
-          const p3 = projectPlane(b.x2, b.y2);
-          const p4 = projectPlane(b.x1, b.y1);
           const [vr, vg, vb] = spectrum[a.wlIndex].vivid;
-          const alpha = a.energy * (a.inside ? 0.5 : 0.76);
+          const alpha = a.energy * (a.inside ? 0.52 : 0.76);
 
           if (a.inside) {
             offCtx.fillStyle = `rgba(${vr},${vg},${vb},${alpha.toFixed(3)})`;
           } else {
-            const grad = offCtx.createLinearGradient(p1[0], p1[1], p2[0], p2[1]);
+            const grad = offCtx.createLinearGradient(a.x1, a.y1, a.x2, a.y2);
             grad.addColorStop(0, `rgba(${vr},${vg},${vb},${alpha.toFixed(3)})`);
             grad.addColorStop(
               0.3,
@@ -1235,40 +1212,34 @@ export function PrismBackground() {
           }
 
           offCtx.beginPath();
-          offCtx.moveTo(p1[0], p1[1]);
-          offCtx.lineTo(p2[0], p2[1]);
-          offCtx.lineTo(p3[0], p3[1]);
-          offCtx.lineTo(p4[0], p4[1]);
+          offCtx.moveTo(a.x1, a.y1);
+          offCtx.lineTo(a.x2, a.y2);
+          offCtx.lineTo(b.x2, b.y2);
+          offCtx.lineTo(b.x1, b.y1);
           offCtx.closePath();
           offCtx.fill();
         }
 
         for (const seg of segs) {
           const sp = spectrum[seg.wlIndex];
-          const p1 = projectPlane(seg.x1, seg.y1);
-          const p2 = projectPlane(seg.x2, seg.y2);
           const alpha = Math.min(1, sp.weight * seg.energy * 2.2);
           offCtx.strokeStyle = `rgba(${sp.core[0]},${sp.core[1]},${sp.core[2]},${alpha.toFixed(3)})`;
           offCtx.lineWidth = seg.inside ? 4 : 3.4;
           offCtx.beginPath();
-          offCtx.moveTo(p1[0], p1[1]);
-          offCtx.lineTo(p2[0], p2[1]);
+          offCtx.moveTo(seg.x1, seg.y1);
+          offCtx.lineTo(seg.x2, seg.y2);
           offCtx.stroke();
         }
       });
 
       for (const g of glints) {
         const edge = triEdges[g.face];
-        const pa = projectPlane(edge.a[0], edge.a[1]);
-        const pb = projectPlane(edge.b[0], edge.b[1]);
-        const pg = projectPlane(g.x, g.y);
-
         const grad = offCtx.createRadialGradient(
-          pg[0],
-          pg[1],
+          g.x,
+          g.y,
           0,
-          pg[0],
-          pg[1],
+          g.x,
+          g.y,
           0.2 * S
         );
         grad.addColorStop(0, 'rgba(255,255,255,0.95)');
@@ -1276,17 +1247,17 @@ export function PrismBackground() {
         offCtx.strokeStyle = grad;
         offCtx.lineWidth = 2;
         offCtx.beginPath();
-        offCtx.moveTo(pa[0], pa[1]);
-        offCtx.lineTo(pb[0], pb[1]);
+        offCtx.moveTo(edge.a[0], edge.a[1]);
+        offCtx.lineTo(edge.b[0], edge.b[1]);
         offCtx.stroke();
 
         offCtx.fillStyle = 'rgba(255,255,255,0.95)';
         offCtx.beginPath();
-        offCtx.arc(pg[0], pg[1], 2.6, 0, Math.PI * 2);
+        offCtx.arc(g.x, g.y, 2.6, 0, Math.PI * 2);
         offCtx.fill();
       }
 
-      // Soft 3-pass bloom composite on lightweight half-res buffer
+      // Soft 3-pass bloom on lightweight half-res buffer
       fxCtx.setTransform(1, 0, 0, 1, 0, 0);
       fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
       fxCtx.globalCompositeOperation = 'lighter';
@@ -1333,21 +1304,20 @@ export function PrismBackground() {
         sceneBg &&
         scenePrismBack &&
         scenePrismFront &&
-        sceneCopy &&
-        frontMat
+        sceneCopy
       ) {
         lightTex.needsUpdate = true;
-        frontMat.uniforms.uViewProj.value.copy(viewProj);
 
+        // 1. Render background + rainbow beam + recessed 3D back faces into RT
         renderer.setRenderTarget(rt);
-        renderer.clear();
+        renderer.clear(true, true, false);
         renderer.render(sceneBg, orthoCam);
         renderer.render(scenePrismBack, camera);
 
+        // 2. Copy RT to screen and render translucent 3D front faces refracting the RT
         renderer.setRenderTarget(null);
-        renderer.clear();
+        renderer.clear(true, true, false);
         renderer.render(sceneCopy, orthoCam);
-
         renderer.clearDepth();
         renderer.render(scenePrismFront, camera);
       } else {
@@ -1356,9 +1326,9 @@ export function PrismBackground() {
         fxCtx.strokeStyle = 'rgba(215, 226, 234, 0.25)';
         fxCtx.lineWidth = 1.5;
         fxCtx.beginPath();
-        fxCtx.moveTo(triVerts[0][0], triVerts[0][1]);
-        fxCtx.lineTo(triVerts[1][0], triVerts[1][1]);
-        fxCtx.lineTo(triVerts[2][0], triVerts[2][1]);
+        fxCtx.moveTo(top2D[0], top2D[1]);
+        fxCtx.lineTo(right2D[0], right2D[1]);
+        fxCtx.lineTo(left2D[0], left2D[1]);
         fxCtx.closePath();
         fxCtx.stroke();
       }
@@ -1371,7 +1341,6 @@ export function PrismBackground() {
       }
     };
 
-    // Pause WebGL + 2D light engine completely when Hero is scrolled offscreen
     const io = new IntersectionObserver(
       (entries) => {
         isHeroVisible = entries[0]?.isIntersecting ?? true;
