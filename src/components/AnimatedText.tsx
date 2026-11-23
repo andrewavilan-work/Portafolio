@@ -1,26 +1,18 @@
 import { useRef } from 'react';
 import { motion, MotionValue, useScroll, useTransform } from 'framer-motion';
 
-interface CharProps {
-  char: string;
+interface WordProps {
+  word: string;
   range: [number, number];
   progress: MotionValue<number>;
 }
 
-function AnimatedChar({ char, range, progress }: CharProps) {
+function AnimatedWord({ word, range, progress }: WordProps) {
   const opacity = useTransform(progress, range, [0.2, 1]);
   return (
-    <span className="relative inline-block">
-      <span className="opacity-20" aria-hidden="true">
-        {char === ' ' ? '\u00A0' : char}
-      </span>
-      <motion.span
-        style={{ opacity }}
-        className="absolute inset-0"
-      >
-        {char === ' ' ? '\u00A0' : char}
-      </motion.span>
-    </span>
+    <motion.span style={{ opacity }} className="inline-block">
+      {word}
+    </motion.span>
   );
 }
 
@@ -37,8 +29,7 @@ export function AnimatedText({ text, className = '' }: AnimatedTextProps) {
   });
 
   const words = text.split(' ');
-  const totalChars = text.length;
-  let charCursor = 0;
+  const totalWords = words.length;
 
   return (
     <p
@@ -47,34 +38,16 @@ export function AnimatedText({ text, className = '' }: AnimatedTextProps) {
       style={{ fontSize: 'clamp(1rem, 2vw, 1.35rem)' }}
     >
       {words.map((word, wIdx) => {
-        const chars = Array.from(word);
-        const wordEl = (
-          <span key={`${word}-${wIdx}`} className="inline-block whitespace-nowrap">
-            {chars.map((ch, cIdx) => {
-              const idx = charCursor++;
-              const start = idx / totalChars;
-              const end = Math.min(1, (idx + 1) / totalChars);
-              return (
-                <AnimatedChar
-                  key={`${wIdx}-${cIdx}`}
-                  char={ch}
-                  range={[start, end]}
-                  progress={scrollYProgress}
-                />
-              );
-            })}
-          </span>
-        );
-
-        // Advance cursor for space
-        if (wIdx < words.length - 1) {
-          charCursor++;
-        }
-
+        const start = wIdx / totalWords;
+        const end = Math.min(1, (wIdx + 1.5) / totalWords);
         return (
-          <span key={`wrap-${wIdx}`}>
-            {wordEl}
-            {wIdx < words.length - 1 ? ' ' : ''}
+          <span key={`${word}-${wIdx}`}>
+            <AnimatedWord
+              word={word}
+              range={[start, end]}
+              progress={scrollYProgress}
+            />
+            {wIdx < totalWords - 1 ? ' ' : ''}
           </span>
         );
       })}

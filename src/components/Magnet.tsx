@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useRef, useState } from 'react';
+import { ReactNode, useRef } from 'react';
 
 interface MagnetProps {
   children: ReactNode;
@@ -9,55 +9,53 @@ interface MagnetProps {
   className?: string;
 }
 
+/**
+ * Zero-re-render magnetic wrapper: mutates transform directly on the DOM node
+ * only when the pointer is within the local magnetic zone.
+ */
 export function Magnet({
   children,
-  padding = 120,
-  strength = 3,
-  activeTransition = 'transform 0.3s ease-out',
-  inactiveTransition = 'transform 0.6s ease-in-out',
+  strength = 4,
+  activeTransition = 'transform 0.2s ease-out',
+  inactiveTransition = 'transform 0.5s cubic-bezier(0.22, 1, 0.36, 1)',
   className = '',
 }: MagnetProps) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [isActive, setIsActive] = useState(false);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const outerRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      const el = ref.current;
-      if (!el) return;
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const outer = outerRef.current;
+    const inner = innerRef.current;
+    if (!outer || !inner) return;
 
-      const rect = el.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
+    const rect = outer.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const dx = (e.clientX - centerX) / strength;
+    const dy = (e.clientY - centerY) / strength;
 
-      const distX = Math.abs(e.clientX - centerX);
-      const distY = Math.abs(e.clientY - centerY);
+    inner.style.transition = activeTransition;
+    inner.style.transform = `translate3d(${dx.toFixed(1)}px, ${dy.toFixed(1)}px, 0)`;
+  };
 
-      if (
-        distX < rect.width / 2 + padding &&
-        distY < rect.height / 2 + padding
-      ) {
-        setIsActive(true);
-        setOffset({
-          x: (e.clientX - centerX) / strength,
-          y: (e.clientY - centerY) / strength,
-        });
-      } else {
-        setIsActive(false);
-        setOffset({ x: 0, y: 0 });
-      }
-    };
-
-    window.addEventListener('mousemove', handleMouseMove, { passive: true });
-    return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, [padding, strength]);
+  const handlePointerLeave = () => {
+    const inner = innerRef.current;
+    if (!inner) return;
+    inner.style.transition = inactiveTransition;
+    inner.style.transform = 'translate3d(0px, 0px, 0)';
+  };
 
   return (
-    <div ref={ref} className={`inline-block ${className}`}>
+    <div
+      ref={outerRef}
+      onPointerMove={handlePointerMove}
+      onPointerLeave={handlePointerLeave}
+      className={`inline-block p-3 -m-3 ${className}`}
+    >
       <div
+        ref={innerRef}
         style={{
-          transform: `translate3d(${offset.x}px, ${offset.y}px, 0)`,
-          transition: isActive ? activeTransition : inactiveTransition,
+          transform: 'translate3d(0px, 0px, 0)',
           willChange: 'transform',
         }}
       >

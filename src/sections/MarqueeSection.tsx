@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import { ArrowUpRight } from 'lucide-react';
 import { MARQUEE_ROW_1, MARQUEE_ROW_2, MarqueeTile } from '../data/portfolio';
 
-const row1 = [...MARQUEE_ROW_1, ...MARQUEE_ROW_1, ...MARQUEE_ROW_1];
-const row2 = [...MARQUEE_ROW_2, ...MARQUEE_ROW_2, ...MARQUEE_ROW_2];
+const row1 = [...MARQUEE_ROW_1, ...MARQUEE_ROW_1];
+const row2 = [...MARQUEE_ROW_2, ...MARQUEE_ROW_2];
 
 function MarqueeCard({ tile }: { tile: MarqueeTile }) {
   return (
@@ -18,9 +18,8 @@ function MarqueeCard({ tile }: { tile: MarqueeTile }) {
         alt={`${tile.title} — ${tile.subtitle}`}
         loading="lazy"
         decoding="async"
-        className="h-full w-full object-cover object-top brightness-[0.9] contrast-[1.03] transition-all duration-700 group-hover:scale-[1.04] group-hover:brightness-100"
+        className="h-full w-full object-cover object-top brightness-[0.9] contrast-[1.03] transition-transform duration-500 group-hover:scale-[1.03]"
       />
-      {/* Subtle obsidian bottom scrim with real project attribution */}
       <div
         className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between p-4"
         style={{
@@ -48,38 +47,57 @@ export function MarqueeSection() {
   const row2Ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const el = sectionRef.current;
+    if (!el) return;
+
     let rafId = 0;
+    let isVisible = false;
+    let cachedTop = el.offsetTop;
 
     const update = () => {
-      const el = sectionRef.current;
-      if (!el) return;
-      const sectionTop = el.offsetTop;
-      const offset = (window.scrollY - sectionTop + window.innerHeight) * 0.28;
-
+      const offset = (window.scrollY - cachedTop + window.innerHeight) * 0.25;
       if (row1Ref.current) {
-        row1Ref.current.style.transform = `translate3d(${offset - 220}px, 0, 0)`;
+        row1Ref.current.style.transform = `translate3d(${(offset - 220).toFixed(1)}px, 0, 0)`;
       }
       if (row2Ref.current) {
-        row2Ref.current.style.transform = `translate3d(${-(offset - 220)}px, 0, 0)`;
+        row2Ref.current.style.transform = `translate3d(${(-(offset - 220)).toFixed(1)}px, 0, 0)`;
       }
     };
 
     const onScroll = () => {
-      if (rafId) return;
+      if (!isVisible || rafId) return;
       rafId = window.requestAnimationFrame(() => {
         rafId = 0;
         update();
       });
     };
 
+    const onResize = () => {
+      cachedTop = el.offsetTop;
+      onScroll();
+    };
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        isVisible = entries[0]?.isIntersecting ?? false;
+        if (isVisible) {
+          cachedTop = el.offsetTop;
+          update();
+        }
+      },
+      { rootMargin: '150px 0px' }
+    );
+    io.observe(el);
+
     update();
     window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', onScroll, { passive: true });
+    window.addEventListener('resize', onResize, { passive: true });
 
     return () => {
+      io.disconnect();
       window.cancelAnimationFrame(rafId);
       window.removeEventListener('scroll', onScroll);
-      window.removeEventListener('resize', onScroll);
+      window.removeEventListener('resize', onResize);
     };
   }, []);
 
@@ -89,7 +107,6 @@ export function MarqueeSection() {
       aria-label="Real websites built by Andrew Avilán"
       className="relative overflow-hidden bg-[#0C0C0C] pb-12 pt-20 sm:pt-28 md:pt-36"
     >
-      {/* Obsidian edge fades */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-y-0 left-0 z-10 w-14 sm:w-28"
@@ -108,7 +125,7 @@ export function MarqueeSection() {
       <div className="flex flex-col gap-3.5">
         <div
           ref={row1Ref}
-          className="flex -ml-[620px] gap-3.5"
+          className="flex -ml-[520px] gap-3.5"
           style={{ willChange: 'transform' }}
         >
           {row1.map((tile, idx) => (
@@ -118,7 +135,7 @@ export function MarqueeSection() {
 
         <div
           ref={row2Ref}
-          className="flex -ml-[240px] gap-3.5"
+          className="flex -ml-[200px] gap-3.5"
           style={{ willChange: 'transform' }}
         >
           {row2.map((tile, idx) => (
