@@ -1,0 +1,235 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0c0c0c;
+  --bg-2: #151517;
+  --ink: #ededed;
+  --platinum: #d7e2ea;
+  --muted: #a1a1a1;
+  --dim: #6e6e73;
+  --line: rgba(255, 255, 255, 0.12);
+  --chip: rgba(255, 255, 255, 0.04);
+  --gutter: clamp(16px, 2.6vw, 28px);
+  --sans: 'Kanit', sans-serif;
+  --ui-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --serif: 'Newsreader', 'Times New Roman', serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  background-color: #0c0c0c;
+  color: #ededed;
+  font-family: 'Kanit', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  overflow-x: clip;
+}
+
+:focus-visible {
+  outline: 2px solid #d7e2ea;
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* Sculptural 3D Brushed Liquid-Titanium Display Typography */
+.hero-heading {
+  background: linear-gradient(
+    180deg,
+    #ffffff 0%,
+    #e9f0f6 16%,
+    #9ba6b2 46%,
+    #dde6ee 64%,
+    #58616c 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.22))
+    drop-shadow(0 16px 34px rgba(0, 0, 0, 0.85));
+}
+
+/* Monumental hero variant with subtle specular prismatic depth */
+.hero-heading-sculpt {
+  background: linear-gradient(
+    172deg,
+    #ffffff 0%,
+    #eef4f9 14%,
+    #b7c4d0 38%,
+    #6e7884 54%,
+    #dce6ef 70%,
+    #454c56 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 2px 0 rgba(255, 255, 255, 0.16))
+    drop-shadow(0 10px 24px rgba(0, 0, 0, 0.92))
+    drop-shadow(0 0 42px rgba(187, 204, 215, 0.12));
+}
+
+/* Sobrio Luxury Prismatic Glass Button (matches the 3D crystal rainbow refraction) */
+@property --prism-angle {
+  syntax: '<angle>';
+  initial-value: 115deg;
+  inherits: false;
+}
+
+@keyframes prism-orbit {
+  0% {
+    --prism-angle: 0deg;
+  }
+  100% {
+    --prism-angle: 360deg;
+  }
+}
+
+@layer components {
+  .prism-cta {
+    position: relative;
+    isolation: isolate;
+    border-radius: 9999px;
+    padding: 1.5px;
+    background: conic-gradient(
+      from var(--prism-angle),
+      rgba(255, 255, 255, 0.65) 0deg,
+      rgba(130, 215, 255, 0.72) 55deg,
+      rgba(182, 162, 255, 0.62) 110deg,
+      rgba(255, 168, 200, 0.56) 165deg,
+      rgba(255, 218, 150, 0.64) 225deg,
+      rgba(155, 240, 210, 0.62) 290deg,
+      rgba(255, 255, 255, 0.65) 360deg
+    );
+    animation: prism-orbit 9s linear infinite;
+    box-shadow:
+      0 12px 34px rgba(0, 0, 0, 0.65),
+      0 0 28px rgba(160, 215, 255, 0.12);
+    transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.35s ease;
+  }
+
+  /* Seamless obsidian void melt for all 4 luxury 3D sculptures */
+  .sculpture-blend {
+    mix-blend-mode: screen;
+    filter: contrast(1.08) brightness(1.06);
+    -webkit-mask-image: radial-gradient(
+      ellipse 64% 64% at 50% 50%,
+      #000 42%,
+      transparent 84%
+    );
+    mask-image: radial-gradient(
+      ellipse 64% 64% at 50% 50%,
+      #000 42%,
+      transparent 84%
+    );
+  }
+}
+
+.prism-cta::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  z-index: -1;
+  border-radius: 9999px;
+  background: conic-gradient(
+    from var(--prism-angle),
+    rgba(130, 215, 255, 0.32),
+    rgba(182, 162, 255, 0.25),
+    rgba(255, 180, 190, 0.22),
+    rgba(255, 224, 156, 0.25),
+    rgba(145, 238, 212, 0.28),
+    rgba(130, 215, 255, 0.32)
+  );
+  filter: blur(14px);
+  opacity: 0.45;
+  transition: opacity 0.35s ease;
+}
+
+.prism-cta:hover {
+  transform: translateY(-1px) scale(1.025);
+  box-shadow:
+    0 16px 42px rgba(0, 0, 0, 0.78),
+    0 0 38px rgba(185, 225, 255, 0.24);
+}
+
+.prism-cta:hover::before {
+  opacity: 0.85;
+}
+
+.prism-cta-inner {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  border-radius: 9999px;
+  background: linear-gradient(
+    180deg,
+    rgba(24, 25, 29, 0.94) 0%,
+    rgba(11, 11, 13, 0.98) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -10px 20px rgba(0, 0, 0, 0.55);
+  color: #f4f7fa;
+  backdrop-filter: blur(12px);
+}
+
+/* Subtle luxury glass hairline command bar (from halo design system) */
+.luxury-cmd {
+  position: relative;
+}
+
+.luxury-cmd::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.28),
+    rgba(255, 255, 255, 0.08) 70%,
+    transparent
+  );
+}
+
+/* Subtle luxury scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0c0c0c;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(215, 226, 234, 0.2);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(215, 226, 234, 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .prism-cta {
+    animation: none;
+  }
+}
